@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.log
+opencart-credentials*.json
+shared-databases-credentials*.json
+*.backup.sql
