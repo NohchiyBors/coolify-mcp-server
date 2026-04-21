@@ -2,6 +2,22 @@
 
 MCP server for managing one or more Coolify API instances.
 
+## Install From GitHub
+
+```powershell
+git clone https://github.com/NohchiyBors/coolify-mcp-server.git
+cd coolify-mcp-server
+npm install
+Copy-Item .env.example .env
+```
+
+Update `.env` values (`COOLIFY_API_BASE_URL`, `COOLIFY_API_TOKEN`), then run:
+
+```powershell
+npm run build
+npm start
+```
+
 ## Install
 
 ```powershell
