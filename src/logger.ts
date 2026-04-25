@@ -103,8 +103,10 @@ export class Logger {
   private write(level: LogLevel, msg: string, fields?: Record<string, unknown>): void {
     if (!this.canLog(level)) return;
     const line = serialize(level, msg, fields);
-    const stream = level === 'error' ? process.stderr : process.stdout;
-    stream.write(`${line}\n`);
+    // All logs go to stderr. The MCP stdio transport reserves stdout for
+    // JSON-RPC frames; writing anything else there corrupts the protocol
+    // stream and breaks the client.
+    process.stderr.write(`${line}\n`);
   }
 
   debug(msg: string, fields?: Record<string, unknown>): void {
