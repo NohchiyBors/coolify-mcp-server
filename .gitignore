@@ -5,3 +5,30 @@ dist/
 opencart-credentials*.json
 shared-databases-credentials*.json
 *.backup.sql
+/coolify-monitoring/
+
+# Local agent/tool state
+.claude/
+.codex/
+.cursor/
+.gemini/
+
+# StatusProject active state and generated audits
+/TODO*.md
+/MEMORY*.md
+/PROJECT-RESUME*.md
+/STATUS-LOG*.md
+/PROBLEMS.md
+/StatusProject/TODO*.md
+/StatusProject/MEMORY*.md
+/StatusProject/PROJECT-RESUME*.md
+/StatusProject/STATUS-LOG*.md
+StatusProject/coolify-audit-*.json
+StatusProject/coolify-audit-*.md
+StatusProject/coolify-server-tree-*.json
+StatusProject/coolify-server-tree-*.md
+StatusProject/mail-services-*.json
+StatusProject/mail-services-*.md
+
+# Isolated local projects
+/child-repos/

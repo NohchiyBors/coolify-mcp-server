@@ -81,9 +81,8 @@ async function main(): Promise<void> {
         ? (request.params.arguments as Record<string, unknown>)
         : {};
 
-      const requestedId = typeof args.server_id === 'string' ? args.server_id : undefined;
-      const defaultId = Object.keys(config.servers)[0];
-      const serverId = requestedId || defaultId;
+      const requestedId = typeof args.server_id === 'string' ? args.server_id.trim().toLowerCase() : undefined;
+      const serverId = requestedId || config.defaultServerId;
       logger.info('tool_call_started', {
         request_id: requestId,
         tool: request.params.name,

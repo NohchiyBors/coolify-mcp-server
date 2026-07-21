@@ -45,7 +45,8 @@ Requires Node 20+ (built-in `fetch`, `AbortSignal.timeout`).
 | Variable | Default | Notes |
 |---|---|---|
 | `COOLIFY_API_BASE_URL` | `https://coolify.example.com/api/v1` | Base URL ending in `/api/v1`. |
-| `COOLIFY_API_TOKEN` | — | Required. Coolify Bearer token. |
+| `COOLIFY_API_TOKEN` | — | Bearer token for the default profile; optional when named/indexed profiles are configured. |
+| `COOLIFY_ID` | `host` | `server_id` for the default profile (`COOLIFY_API_TOKEN`). |
 | `COOLIFY_TIMEOUT_MS` | `30000` | Per-request timeout. |
 | `COOLIFY_USER_AGENT` | `coolify-mcp-server/0.1.0` | Sent on every API call. |
 | `COOLIFY_ALLOW_RAW_WRITE` | `false` | Allow non-GET via `coolify_api_request` (still needs `confirm=true`). |
@@ -74,11 +75,13 @@ COOLIFY_PROD_API_TOKEN=...
 
 → `server_id: "prod"`.
 
+Each profile also registers the **hostname** from `*_API_BASE_URL` as an alias (e.g. `https://host.ickz.net/api/v1` → `server_id: "host.ickz.net"`). Short names and domain aliases point at the same profile.
+
 Each profile may override `*_TIMEOUT_MS`, `*_USER_AGENT`, `*_ALLOW_RAW_WRITE` independently.
 
 ## MCP usage
 
-Every tool accepts an optional `server_id`. If omitted, the first registered profile is used.
+Every tool accepts an optional `server_id`. If omitted, the `COOLIFY_API_TOKEN` profile is used; without it, the first named/indexed profile is used.
 
 ```json
 {
@@ -218,6 +221,10 @@ src/
   coolify-client.ts thin fetch wrapper — timeouts, headers, response parsing
   logger.ts         JSON logs, secret redaction, all → stderr
   tools.ts          72 tool defs + compact CRUD builders (makeCreateBodyTool, ...)
+Test/
+  mock_coolify.mjs  local HTTP mock of /api/v1 for offline driver tests
+  full_test.mjs     JSON-RPC driver — all tools vs mock
+  mcp_test.mjs      read-only smoke vs hosts from .env
 ```
 
 stdio transport: every JSON-RPC frame is one line on stdout; everything else (logs, panics, dotenv noise) goes to stderr.
@@ -226,18 +233,20 @@ Stack: TypeScript 5.9 (strict, NodeNext), `@modelcontextprotocol/sdk` 1.x, `dote
 
 ## Local testing
 
-Two drivers ship with the project — both spawn the real built server over stdio.
+Two drivers ship with the project — both spawn the real built server over stdio. Run from the repo root after `npm run build`.
 
 ```powershell
 # All 72 tools end-to-end against a local mock Coolify
-node full_test.mjs
+node Test/full_test.mjs
 # → 81 passed, 0 failed   (72 happy paths + 9 confirm-gate negative checks)
 
 # Read-only smoke against the real hosts in your .env
-node mcp_test.mjs
+node Test/mcp_test.mjs
 ```
 
-`mock_coolify.mjs` implements every endpoint the tools hit and logs each request, so you can also use it to inspect the exact wire shape (method, path, query, body) the MCP server sends.
+The live smoke checks the default profile plus `hostkz` when configured. Override the selection with `COOLIFY_SMOKE_SERVER_IDS=host,prod`.
+
+`Test/mock_coolify.mjs` implements every endpoint the tools hit and logs each request, so you can also use it to inspect the exact wire shape (method, path, query, body) the MCP server sends.
 
 ## License
 

@@ -53,6 +53,8 @@ function readBooleanEnv(name: string, fallback: boolean): boolean {
 
 export interface AppConfig {
   servers: Record<string, ServerConfig>;
+  /** Canonical profile used when server_id is omitted. */
+  defaultServerId: string;
 }
 
 function buildServerConfig(id: string, prefix: string, tokenEnvName: string, fallbackBaseUrl: string): ServerConfig {
@@ -66,11 +68,48 @@ function buildServerConfig(id: string, prefix: string, tokenEnvName: string, fal
   };
 }
 
+function hostnameFromApiBaseUrl(apiBaseUrl: string): string | undefined {
+  try {
+    const hostname = new URL(apiBaseUrl).hostname.trim().toLowerCase();
+    return hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function registerServer(servers: Record<string, ServerConfig>, serverId: string, config: ServerConfig): void {
+  const existing = servers[serverId];
+  if (existing && existing !== config) {
+    throw new Error(`Duplicate server_id "${serverId}" for Coolify profiles "${existing.id}" and "${config.id}"`);
+  }
+  servers[serverId] = config;
+}
+
+function registerDomainAlias(servers: Record<string, ServerConfig>, config: ServerConfig): void {
+  const hostname = hostnameFromApiBaseUrl(config.apiBaseUrl);
+  if (!hostname || hostname === config.id) {
+    return;
+  }
+
+  const existing = servers[hostname];
+  if (existing && existing.id !== config.id) {
+    throw new Error(
+      `Domain alias "${hostname}" is shared by Coolify profiles "${existing.id}" and "${config.id}"`,
+    );
+  }
+
+  servers[hostname] = config;
+}
+
 export function loadConfig(): AppConfig {
   const servers: Record<string, ServerConfig> = {};
+  let defaultServerId: string | undefined;
 
   if (process.env.COOLIFY_API_TOKEN) {
-    servers['default'] = buildServerConfig('default', 'COOLIFY_', 'COOLIFY_API_TOKEN', 'https://coolify.example.com/api/v1');
+    const serverId = (process.env.COOLIFY_ID?.trim() || 'host').toLowerCase();
+    const config = buildServerConfig(serverId, 'COOLIFY_', 'COOLIFY_API_TOKEN', 'https://coolify.example.com/api/v1');
+    registerServer(servers, serverId, config);
+    defaultServerId = serverId;
   }
 
   for (const key of Object.keys(process.env)) {
@@ -80,7 +119,7 @@ export function loadConfig(): AppConfig {
       const index = indexedMatch[1];
       const prefix = `COOLIFY_${index}_`;
       const serverId = (process.env[`${prefix}ID`]?.trim() || index).toLowerCase();
-      servers[serverId] = buildServerConfig(serverId, prefix, key, 'https://coolify.example.com/api/v1');
+      registerServer(servers, serverId, buildServerConfig(serverId, prefix, key, 'https://coolify.example.com/api/v1'));
       continue;
     }
 
@@ -90,13 +129,25 @@ export function loadConfig(): AppConfig {
       if (serverId === 'api' || /^\d+$/.test(serverId)) continue;
 
       const prefix = `COOLIFY_${match[1]}_`;
-      servers[serverId] = buildServerConfig(serverId, prefix, key, 'https://coolify.example.com/api/v1');
+      registerServer(servers, serverId, buildServerConfig(serverId, prefix, key, 'https://coolify.example.com/api/v1'));
     }
   }
 
-  if (Object.keys(servers).length === 0) {
+  if (!defaultServerId) {
+    defaultServerId = Object.values(servers)[0]?.id;
+  }
+
+  if (!defaultServerId) {
     throw new Error('No Coolify servers configured. Please set COOLIFY_API_TOKEN or COOLIFY_<ID>_API_TOKEN');
   }
 
-  return { servers };
+  const canonicalConfigs = new Map<string, ServerConfig>();
+  for (const config of Object.values(servers)) {
+    canonicalConfigs.set(config.id, config);
+  }
+  for (const config of canonicalConfigs.values()) {
+    registerDomainAlias(servers, config);
+  }
+
+  return { servers, defaultServerId };
 }
