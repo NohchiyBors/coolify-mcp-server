@@ -1,0 +1,70 @@
+# StatusProject local state
+TODO.md
+MEMORY.md
+PROJECT-RESUME.md
+STATUS-LOG.md
+STATE-HISTORY.md
+PLAN.md
+REQUIREMENTS.md
+ARCHITECTURE.md
+PROJECT-TREE.md
+INFRASTRUCTURE.md
+SOFTWARE.md
+DEVELOPMENT-STATUS.md
+TESTING.md
+MCP.md
+TODO-*.md
+MEMORY-*.md
+PROJECT-RESUME-*.md
+STATUS-LOG-*.md
+STATE-HISTORY-*.md
+PLAN-*.md
+REQUIREMENTS-*.md
+ARCHITECTURE-*.md
+PROJECT-TREE-*.md
+INFRASTRUCTURE-*.md
+SOFTWARE-*.md
+DEVELOPMENT-STATUS-*.md
+TESTING-*.md
+MCP-*.md
+
+# Systems engineering local evidence
+*-evidence/
+*-reports/
+verification-output/
+validation-output/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+secrets/
+private/
+
+# Logs and temporary output
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Local agent/tool state
+.codex/
+.claude/
+.cursor/
+
+# OS/editor noise
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

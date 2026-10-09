@@ -1,6 +1,6 @@
 {
   "name": "coolify-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for managing one or more Coolify API instances",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,14 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "check": "npm run build"
+    "start:wsl": "bash scripts/start-wsl.sh",
+    "check": "npm run build && node Test/config_test.mjs && node Test/runtime_test.mjs && node Test/wsl_launcher_test.mjs && node Test/redaction_test.mjs && node Test/api_compatibility_test.mjs && node Test/full_test.mjs && node Test/stdio_transport_test.mjs && node Test/http_transport_test.mjs",
+    "test:wsl": "node Test/wsl_launcher_test.mjs",
+    "test:config": "node Test/config_test.mjs",
+    "test:runtime": "node Test/runtime_test.mjs",
+    "test:full": "node Test/full_test.mjs",
+    "test:http": "node Test/http_transport_test.mjs",
+    "test:stdio": "node Test/stdio_transport_test.mjs"
   },
   "keywords": [
     "mcp",

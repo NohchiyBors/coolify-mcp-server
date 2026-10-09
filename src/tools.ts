@@ -1,5 +1,6 @@
 import type { ServerConfig } from './config.js';
-import { callCoolifyApi, type HttpMethod, type ApiCallResult } from './coolify-client.js';
+import { randomBytes } from 'node:crypto';
+import { callCoolifyApi, CoolifyApiError, type HttpMethod, type ApiCallResult } from './coolify-client.js';
 
 export interface JsonSchema {
   type?: string | string[];
@@ -10,6 +11,8 @@ export interface JsonSchema {
   description?: string;
   default?: unknown;
   minimum?: number;
+  maximum?: number;
+  oneOf?: JsonSchema[];
   additionalProperties?: boolean | JsonSchema;
 }
 
@@ -77,6 +80,52 @@ function requireConfirm(args: Record<string, unknown>, name: string): void {
   if (booleanArg(args, 'confirm') !== true) {
     throw new Error(`${name}: confirm=true is required to perform this write`);
   }
+}
+
+const logProperties: Record<string, JsonSchema> = {
+  uuid: { type: 'string', description: 'Resource UUID.' },
+  lines: {
+    description: 'Lines from the end: 1–10000, -1, or "all". "all" requires Coolify 4.3.20+. Omit for the API default of 100.',
+    oneOf: [
+      { type: 'integer', minimum: 1, maximum: 10000 },
+      { type: 'integer', enum: [-1] },
+      { type: 'string', enum: ['all'] },
+    ],
+  },
+  show_timestamps: { type: 'boolean', description: 'Include timestamps in the logs.' },
+};
+
+function logQuery(args: Record<string, unknown>): Record<string, unknown> {
+  const lines = args.lines;
+  if (lines !== undefined && lines !== 'all' &&
+      !(typeof lines === 'number' && Number.isInteger(lines) && (lines === -1 || (lines >= 1 && lines <= 10000)))) {
+    throw new Error('Argument lines must be an integer from 1 to 10000, -1, or "all"');
+  }
+  return includeDefined({ lines, show_timestamps: booleanArg(args, 'show_timestamps') });
+}
+
+function makeLogTool(name: string, title: string, path: (uuid: string) => string): ToolDefinition {
+  return {
+    name, title, description: 'Gets runtime logs. Supports lines and show_timestamps; full-log requests may produce large responses.',
+    inputSchema: { type: 'object', properties: logProperties, required: ['uuid'], additionalProperties: false },
+    handler: (cfg, args) => callCoolifyApi(cfg, {
+      path: path(encodeURIComponent(requiredStringArg(args, 'uuid'))), query: logQuery(args),
+    }),
+  };
+}
+
+function makeCurrentTeamTool(name: string, title: string, suffix: string): ToolDefinition {
+  return {
+    name, title, description: 'Reads the API token team using /team, with a 404-only fallback for older Coolify versions.', inputSchema: emptySchema,
+    handler: async (cfg) => {
+      try {
+        return await callCoolifyApi(cfg, { path: `/team${suffix}` });
+      } catch (error) {
+        if (!(error instanceof CoolifyApiError) || error.status !== 404) throw error;
+        return callCoolifyApi(cfg, { path: `/teams/current${suffix}` });
+      }
+    },
+  };
 }
 
 // ─── Schema builders for write tools ─────────────────────────────────────────
@@ -195,9 +244,18 @@ function makeDeleteChildByUuidTool(
 const baseTools: ToolDefinition[] = [
   {
     name: 'coolify_current_server', title: 'Current Coolify server',
-    description: 'Returns the selected Coolify server profile id and API base URL.',
+    description: 'Returns the selected Coolify server profile id, API base URL, and configured external/local IP metadata. IP fields do not change API routing.',
     inputSchema: emptySchema,
-    handler: async (cfg) => ({ status: 200, headers: {}, data: { id: cfg.id, apiBaseUrl: cfg.apiBaseUrl } }),
+    handler: async (cfg) => ({
+      status: 200,
+      headers: {},
+      data: {
+        id: cfg.id,
+        apiBaseUrl: cfg.apiBaseUrl,
+        externalIp: cfg.externalIp ?? null,
+        localIp: cfg.localIp ?? null,
+      },
+    }),
   },
   { name: 'coolify_healthcheck', title: 'Coolify healthcheck',
     description: 'Checks /health. Does not require auth.', inputSchema: emptySchema,
@@ -225,18 +283,30 @@ const baseTools: ToolDefinition[] = [
   { name: 'coolify_get_application', title: 'Get application',
     description: 'Gets an application by UUID.', inputSchema: uuidSchema,
     handler: (cfg, args) => callCoolifyApi(cfg, { path: `/applications/${encodeURIComponent(requiredStringArg(args, 'uuid'))}` }) },
+  makeLogTool('coolify_get_application_logs', 'Get application logs', (u) => `/applications/${u}/logs`),
+  makeLogTool('coolify_get_database_logs', 'Get database logs', (u) => `/databases/${u}/logs`),
   {
-    name: 'coolify_get_application_logs', title: 'Get application logs',
-    description: 'Gets application logs by UUID.',
-    inputSchema: { type: 'object',
-      properties: {
-        uuid: { type: 'string', description: 'Application UUID.' },
-        lines: { type: 'integer', description: 'Lines from end of logs.', default: 100, minimum: 1 },
-      },
-      required: ['uuid'], additionalProperties: false },
+    name: 'coolify_get_preview_application_logs', title: 'Get preview application logs',
+    description: 'Gets runtime logs for a running application preview by pull request ID. Requires Coolify 4.3.23+; these are not build logs.',
+    inputSchema: { type: 'object', properties: {
+      ...logProperties, pull_request_id: { type: 'integer', minimum: 1, description: 'Pull request ID.' },
+    }, required: ['uuid', 'pull_request_id'], additionalProperties: false },
+    handler: (cfg, args) => {
+      const pr = args.pull_request_id;
+      if (typeof pr !== 'number' || !Number.isSafeInteger(pr) || pr < 1) throw new Error('Argument pull_request_id must be a positive integer');
+      return callCoolifyApi(cfg, {
+        path: `/applications/${encodeURIComponent(requiredStringArg(args, 'uuid'))}/previews/${pr}/logs`, query: logQuery(args),
+      });
+    },
+  },
+  {
+    ...makeLogTool('coolify_get_service_logs', 'Get service logs', (u) => `/services/${u}/logs`),
+    inputSchema: { type: 'object', properties: {
+      ...logProperties, sub_service_name: { type: 'string', description: 'Required name of a service application/database, from coolify_get_service.' },
+    }, required: ['uuid', 'sub_service_name'], additionalProperties: false },
     handler: (cfg, args) => callCoolifyApi(cfg, {
-      path: `/applications/${encodeURIComponent(requiredStringArg(args, 'uuid'))}/logs`,
-      query: includeDefined({ lines: numberArg(args, 'lines') }),
+      path: `/services/${encodeURIComponent(requiredStringArg(args, 'uuid'))}/logs`,
+      query: includeDefined({ ...logQuery(args), sub_service_name: requiredStringArg(args, 'sub_service_name') }),
     }),
   },
   { name: 'coolify_list_services', title: 'List services',
@@ -284,7 +354,7 @@ const baseTools: ToolDefinition[] = [
       const uuid = stringArg(args, 'uuid'); const tag = stringArg(args, 'tag');
       if (!uuid && !tag) throw new Error('At least one of uuid or tag is required');
       if (tag && numberArg(args, 'pr') !== undefined) throw new Error('Argument pr cannot be used with tag');
-      return callCoolifyApi(cfg, { path: '/deploy',
+      return callCoolifyApi(cfg, { method: 'POST', path: '/deploy',
         query: includeDefined({ uuid, tag, force: booleanArg(args, 'force'), pr: numberArg(args, 'pr') }) });
     },
   },
@@ -311,7 +381,7 @@ const baseTools: ToolDefinition[] = [
           : kind === 'service' && action === 'restart'
             ? includeDefined({ latest: booleanArg(args, 'latest') })
             : {};
-      return callCoolifyApi(cfg, { path: `/${resourcePathByKind[kind]}/${encodeURIComponent(uuid)}/${action}`, query });
+      return callCoolifyApi(cfg, { method: 'POST', path: `/${resourcePathByKind[kind]}/${encodeURIComponent(uuid)}/${action}`, query });
     },
   },
   {
@@ -366,10 +436,24 @@ const applicationCrudTools: ToolDefinition[] = [
     'Create application from Dockerfile', 'Creates an application from a Dockerfile string. Requires confirm=true.',
     '/applications/dockerfile',
     'Required: project_uuid, environment_name, server_uuid, dockerfile (string), ports_exposes. Optional: instant_deploy, name, description, ...'),
-  makeCreateBodyTool('coolify_create_application_dockercompose',
-    'Create application from docker-compose', 'Creates an application from a docker-compose file. Requires confirm=true.',
-    '/applications/dockercompose',
-    'Required: project_uuid, environment_name, server_uuid, docker_compose_raw (string). Optional: instant_deploy, name, description, ...'),
+  {
+    ...makeCreateBodyTool('coolify_create_application_dockercompose',
+      'Create legacy Docker Compose application (Coolify 4.0 only)',
+      'Legacy application endpoint removed in Coolify 4.1. For current Coolify use coolify_create_service_dockercompose, which creates a service. Requires confirm=true.',
+      '/applications/dockercompose', 'Legacy API body; docker_compose_raw must be base64 encoded.'),
+    handler: async (cfg, args) => {
+      requireConfirm(args, 'coolify_create_application_dockercompose');
+      const body = objectArg(args, 'body');
+      if (!body) throw new Error('Argument body is required');
+      const result = await callCoolifyApi(cfg, { path: '/version' });
+      const version = typeof result.data === 'string' ? result.data :
+        typeof result.data === 'object' && result.data !== null ? (result.data as Record<string, unknown>).version : undefined;
+      if (typeof version !== 'string' || !/^v?4\.0\.\d+(?:[-+].*)?$/.test(version.trim())) {
+        throw new Error('Legacy Docker Compose application creation requires Coolify 4.0. Use coolify_create_service_dockercompose to create a compose service on current Coolify. No resource was created.');
+      }
+      return callCoolifyApi(cfg, { method: 'POST', path: '/applications/dockercompose', body });
+    },
+  },
   makeCreateBodyTool('coolify_create_application_dockerimage',
     'Create application from a Docker image', 'Creates an application from an existing Docker image. Requires confirm=true.',
     '/applications/dockerimage',
@@ -382,8 +466,8 @@ const applicationCrudTools: ToolDefinition[] = [
     (u) => `/applications/${u}`),
   {
     name: 'coolify_execute_application_command',
-    title: 'Execute command in container',
-    description: 'POST /applications/{uuid}/execute — runs a shell command in the running container. Requires confirm=true.',
+    title: 'Unavailable: execute command in container',
+    description: 'Compatibility placeholder: Coolify 4.0/4.3.23 have no supported API endpoint for arbitrary container commands. Always returns an error without executing anything. Use the Coolify terminal or separately authorized saved SSH access.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -394,13 +478,9 @@ const applicationCrudTools: ToolDefinition[] = [
       required: ['uuid', 'command', 'confirm'],
       additionalProperties: false,
     },
-    handler: (cfg, args) => {
+    handler: async (_cfg, args) => {
       requireConfirm(args, 'coolify_execute_application_command');
-      return callCoolifyApi(cfg, {
-        method: 'POST',
-        path: `/applications/${encodeURIComponent(requiredStringArg(args, 'uuid'))}/execute`,
-        body: { command: requiredStringArg(args, 'command') },
-      });
+      throw new Error('Coolify has no supported API endpoint for arbitrary container commands. Use the Coolify terminal or separately authorized saved SSH access. No command was executed.');
     },
   },
   makeListByUuidTool('coolify_list_application_envs',
@@ -424,6 +504,24 @@ const applicationCrudTools: ToolDefinition[] = [
 
 // ─── Services CRUD + envs ────────────────────────────────────────────────────
 const serviceCrudTools: ToolDefinition[] = [
+  {
+    ...makeCreateBodyTool('coolify_create_service_dockercompose', 'Create Docker Compose service',
+      'Creates a service via POST /services. body.docker_compose_raw is plain UTF-8 YAML; MCP encodes it as base64. Requires confirm=true. Does not deploy unless instant_deploy=true.',
+      '/services', 'Required: project_uuid, server_uuid, environment_name or environment_uuid, docker_compose_raw (plain UTF-8 YAML, not base64). Optional: name, description, destination_uuid, urls, tags, instant_deploy.'),
+    handler: (cfg, args) => {
+      requireConfirm(args, 'coolify_create_service_dockercompose');
+      const body = objectArg(args, 'body');
+      if (!body) throw new Error('Argument body is required');
+      if (body.type !== undefined) throw new Error('Compose service creation does not accept type; use coolify_create_service for templates');
+      requiredStringArg(body, 'project_uuid'); requiredStringArg(body, 'server_uuid');
+      if (!stringArg(body, 'environment_name') && !stringArg(body, 'environment_uuid')) throw new Error('Provide environment_name or environment_uuid');
+      const compose = body.docker_compose_raw;
+      if (typeof compose !== 'string' || !compose.trim()) throw new Error('body.docker_compose_raw must contain plain UTF-8 Compose YAML');
+      return callCoolifyApi(cfg, { method: 'POST', path: '/services', body: {
+        ...body, docker_compose_raw: Buffer.from(compose, 'utf8').toString('base64'),
+      } });
+    },
+  },
   makeCreateBodyTool('coolify_create_service',
     'Create service from one-click template', 'Creates a one-click service. Requires confirm=true.',
     '/services', serviceCreateBody),
@@ -504,8 +602,61 @@ const serverCrudTools: ToolDefinition[] = [
     'List resources on server', 'Lists resources running on a server.', (u) => `/servers/${u}/resources`),
   makeListByUuidTool('coolify_get_server_domains',
     'List domains on server', 'Lists domains served by a server.', (u) => `/servers/${u}/domains`),
-  makeListByUuidTool('coolify_validate_server',
-    'Validate server', 'Validates a server (SSH connectivity, Docker, etc.).', (u) => `/servers/${u}/validate`),
+  {
+    name: 'coolify_validate_server',
+    title: 'Validate server',
+    description: 'Starts server validation (SSH connectivity, Docker, etc.). Requires confirm=true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string', description: 'Server UUID.' },
+        confirm: { type: 'boolean', description: 'Must be true to start server validation.' },
+      },
+      required: ['uuid', 'confirm'],
+      additionalProperties: false,
+    },
+    handler: (cfg, args) => {
+      requireConfirm(args, 'coolify_validate_server');
+      return callCoolifyApi(cfg, {
+        method: 'POST',
+        path: `/servers/${encodeURIComponent(requiredStringArg(args, 'uuid'))}/validate`,
+      });
+    },
+  },
+  {
+    name: 'coolify_rotate_server_sentinel_token',
+    title: 'Rotate server Sentinel token',
+    description: 'Generates a new Sentinel token inside the MCP server, updates the selected Coolify server, and never returns the token. Requires confirm=true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string', description: 'Server UUID.' },
+        confirm: { type: 'boolean', description: 'Must be true to rotate the Sentinel token and restart/sync Sentinel.' },
+      },
+      required: ['uuid', 'confirm'],
+      additionalProperties: false,
+    },
+    handler: async (cfg, args) => {
+      requireConfirm(args, 'coolify_rotate_server_sentinel_token');
+      const uuid = encodeURIComponent(requiredStringArg(args, 'uuid'));
+      const sentinelToken = randomBytes(32).toString('hex');
+      const result = await callCoolifyApi(cfg, {
+        method: 'PATCH',
+        path: `/servers/${uuid}/sentinel`,
+        body: { sentinel_token: sentinelToken },
+      });
+      return {
+        status: result.status,
+        headers: result.headers,
+        data: {
+          rotated: true,
+          tokenReturned: false,
+          serverUuid: decodeURIComponent(uuid),
+          followUp: 'Verify Sentinel In Sync and healthy state.',
+        },
+      };
+    },
+  },
 ];
 
 // ─── Private keys ────────────────────────────────────────────────────────────
@@ -526,8 +677,8 @@ const privateKeyCrudTools: ToolDefinition[] = [
 const teamReadTools: ToolDefinition[] = [
   makeListTool('coolify_list_teams', 'List teams', 'Lists teams visible to the API token.', '/teams'),
   makeGetByUuidTool('coolify_get_team', 'Get team', 'Gets a team by id.', (u) => `/teams/${u}`),
-  makeListTool('coolify_get_current_team', 'Get current team', 'Returns the team for the current API token.', '/teams/current'),
-  makeListTool('coolify_get_current_team_members', 'List current team members', 'Lists members of the current team.', '/teams/current/members'),
+  makeCurrentTeamTool('coolify_get_current_team', 'Get current team', ''),
+  makeCurrentTeamTool('coolify_get_current_team_members', 'List current team members', '/members'),
 ];
 
 // ─── Final export ────────────────────────────────────────────────────────────
