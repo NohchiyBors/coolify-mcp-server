@@ -1,6 +1,11 @@
+import { isIP } from 'node:net';
+
 export interface ServerConfig {
   id: string;
   apiBaseUrl: string;
+  /** Informational addresses; API requests still use apiBaseUrl. */
+  externalIp?: string;
+  localIp?: string;
   apiToken: string;
   timeoutMs: number;
   userAgent: string;
@@ -33,6 +38,15 @@ function readNumberEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function readOptionalIpEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  if (!value) return undefined;
+  if (!isIP(value)) {
+    throw new Error(`Environment variable ${name} must be an IPv4 or IPv6 address`);
+  }
+  return value;
+}
+
 function readBooleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.trim().toLowerCase();
 
@@ -61,9 +75,11 @@ function buildServerConfig(id: string, prefix: string, tokenEnvName: string, fal
   return {
     id,
     apiBaseUrl: (process.env[`${prefix}API_BASE_URL`] ?? fallbackBaseUrl).trim().replace(/\/+$/, ''),
+    externalIp: readOptionalIpEnv(`${prefix}EXTERNAL_IP`),
+    localIp: readOptionalIpEnv(`${prefix}LOCAL_IP`),
     apiToken: readRequiredEnv(tokenEnvName),
     timeoutMs: readNumberEnv(`${prefix}TIMEOUT_MS`, readNumberEnv('COOLIFY_TIMEOUT_MS', 30_000)),
-    userAgent: (process.env[`${prefix}USER_AGENT`] ?? process.env.COOLIFY_USER_AGENT ?? 'coolify-mcp-server/0.1.0').trim(),
+    userAgent: (process.env[`${prefix}USER_AGENT`] ?? process.env.COOLIFY_USER_AGENT ?? 'coolify-mcp-server/0.2.0').trim(),
     allowRawWrite: readBooleanEnv(`${prefix}ALLOW_RAW_WRITE`, readBooleanEnv('COOLIFY_ALLOW_RAW_WRITE', false)),
   };
 }

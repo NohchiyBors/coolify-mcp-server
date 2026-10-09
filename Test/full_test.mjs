@@ -68,6 +68,10 @@ const calls = [
   ['coolify_list_applications', { tag: 'prod' }],
   ['coolify_get_application', { uuid: APP }],
   ['coolify_get_application_logs', { uuid: APP, lines: 50 }],
+  ['coolify_get_application_logs', { uuid: APP, lines: 'all', show_timestamps: true }],
+  ['coolify_get_preview_application_logs', { uuid: APP, pull_request_id: 42, lines: -1 }],
+  ['coolify_get_database_logs', { uuid: DB, lines: 'all' }],
+  ['coolify_get_service_logs', { uuid: SVC, lines: 20, sub_service_name: 'web' }],
   ['coolify_list_services', {}],
   ['coolify_get_service', { uuid: SVC }],
   ['coolify_list_databases', {}],
@@ -83,10 +87,10 @@ const calls = [
   ['coolify_create_application_private_github_app', { body: { ...dummyApp, github_app_uuid: 'gh-1' }, ...C }],
   ['coolify_create_application_private_deploy_key', { body: { ...dummyApp, private_key_uuid: KEY }, ...C }],
   ['coolify_create_application_dockerfile', { body: dummyDfile, ...C }],
-  ['coolify_create_application_dockercompose', { body: dummyCompose, ...C }],
+  ['coolify_create_application_dockercompose', { body: dummyCompose, ...C }, 'fail'],
   ['coolify_create_application_dockerimage', { body: dummyImage, ...C }],
   ['coolify_update_application', { uuid: APP, body: { name: 'renamed' }, ...C }],
-  ['coolify_execute_application_command', { uuid: APP, command: 'whoami', ...C }],
+  ['coolify_execute_application_command', { uuid: APP, command: 'whoami', ...C }, 'fail'],
   ['coolify_list_application_envs', { uuid: APP }],
   ['coolify_create_application_env', { uuid: APP, body: dummyEnv, ...C }],
   ['coolify_update_application_env', { uuid: APP, body: dummyEnv, ...C }],
@@ -95,6 +99,7 @@ const calls = [
   ['coolify_delete_application', { uuid: APP, ...C }],
 
   // Services CRUD + envs
+  ['coolify_create_service_dockercompose', { body: dummyCompose, ...C }],
   ['coolify_create_service', { body: { type: 'wordpress-with-mysql', project_uuid: PRJ, environment_name: 'production', server_uuid: SRV }, ...C }],
   ['coolify_update_service', { uuid: SVC, body: { name: 'svc-renamed' }, ...C }],
   ['coolify_list_service_envs', { uuid: SVC }],
@@ -130,7 +135,8 @@ const calls = [
   ['coolify_update_server', { uuid: SRV, body: { description: 'd' }, ...C }],
   ['coolify_get_server_resources', { uuid: SRV }],
   ['coolify_get_server_domains', { uuid: SRV }],
-  ['coolify_validate_server', { uuid: SRV }],
+  ['coolify_validate_server', { uuid: SRV, ...C }],
+  ['coolify_rotate_server_sentinel_token', { uuid: SRV, ...C }],
   ['coolify_delete_server', { uuid: SRV, ...C }],
 
   // Private keys
@@ -147,6 +153,7 @@ const calls = [
   ['coolify_get_current_team_members', {}],
 
   // Negative checks — confirm gate
+  ['coolify_create_service_dockercompose', { body: dummyCompose }, 'fail'],
   ['coolify_delete_application',           { uuid: APP }, 'fail'],
   ['coolify_create_application_public',    { body: dummyApp }, 'fail'],
   ['coolify_update_application',           { uuid: APP, body: { name: 'x' } }, 'fail'],
@@ -155,6 +162,8 @@ const calls = [
   ['coolify_create_database_postgresql',   { body: dummyDb }, 'fail'],
   ['coolify_create_project',               { body: { name: 'x' } }, 'fail'],
   ['coolify_create_server',                { body: { name: 's', ip: '1.1.1.1', private_key_uuid: KEY } }, 'fail'],
+  ['coolify_validate_server',              { uuid: SRV }, 'fail'],
+  ['coolify_rotate_server_sentinel_token', { uuid: SRV }, 'fail'],
   ['coolify_api_request',                  { method: 'POST', path: '/echo', body: {} }, 'fail'],
 ];
 
@@ -169,6 +178,50 @@ for (const [name, args, expect] of calls) {
   const got = isToolErr ? 'fail' : (status >= 200 && status < 300 ? 'ok' : 'fail');
   const ok = got === want;
   if (ok) pass++; else { fail++; failures.push({ name, args, want, got, msg: r?.content?.[0]?.text?.slice(0, 200) ?? `HTTP ${status}` }); }
+}
+
+const redactionProbe = await rpc('tools/call', { name: 'coolify_get_server', arguments: { server_id: SID, uuid: SRV } });
+const redactionText = redactionProbe.result?.content?.[0]?.text ?? '';
+const redactionStructured = JSON.stringify(redactionProbe.result?.structuredContent ?? {});
+if (
+  redactionText.includes('server-secret-value') ||
+  redactionText.includes('nested-secret-value') ||
+  redactionStructured.includes('server-secret-value') ||
+  redactionStructured.includes('nested-secret-value') ||
+  !redactionText.includes('[REDACTED]')
+) {
+  fail++;
+  failures.push({ name: 'recursive-output-redaction', args: {}, want: 'redacted', got: 'secret-visible', msg: redactionText.slice(0, 200) });
+} else {
+  pass++;
+}
+
+const validateProbe = await rpc('tools/call', {
+  name: 'coolify_validate_server',
+  arguments: { server_id: SID, uuid: SRV, confirm: true },
+});
+const validateText = validateProbe.result?.content?.[0]?.text ?? '';
+const validateStructured = validateProbe.result?.structuredContent ?? {};
+const validateSerialized = JSON.stringify(validateStructured);
+if (
+  validateProbe.result?.isError === true ||
+  validateStructured.status !== 201 ||
+  validateStructured.data?.request_method !== 'POST' ||
+  validateStructured.data?.request_body_present !== false ||
+  validateText.includes('validate-response-secret') ||
+  validateSerialized.includes('validate-response-secret') ||
+  validateStructured.data?.validation_secret !== '[REDACTED]'
+) {
+  fail++;
+  failures.push({
+    name: 'validate-server-post-no-body-secret',
+    args: { uuid: SRV, confirm: true },
+    want: 'POST, no body, secret redacted',
+    got: validateText.slice(0, 200),
+    msg: validateSerialized.slice(0, 200),
+  });
+} else {
+  pass++;
 }
 console.log(`\nresults: ${pass} passed, ${fail} failed`);
 if (fail) {

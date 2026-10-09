@@ -1,4 +1,5 @@
 import type { ServerConfig } from './config.js';
+import { redactSensitiveData } from './redaction.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE' | 'HEAD';
 
@@ -14,6 +15,13 @@ export interface ApiCallResult {
   status: number;
   headers: Record<string, string>;
   data: unknown;
+}
+
+export class CoolifyApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'CoolifyApiError';
+  }
 }
 
 function appendSearchParams(url: URL, key: string, value: unknown): void {
@@ -110,13 +118,14 @@ export async function callCoolifyApi(config: ServerConfig, options: ApiCallOptio
   });
 
   if (!response.ok) {
-    const details = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-    throw new Error(`Coolify API request failed with ${response.status} ${response.statusText}\n${details}`);
+    const safeData = redactSensitiveData(data);
+    const details = typeof safeData === 'string' ? safeData : JSON.stringify(safeData, null, 2);
+    throw new CoolifyApiError(response.status, `Coolify API request failed with ${response.status} ${response.statusText}\n${details}`);
   }
 
   return {
     status: response.status,
-    headers,
-    data,
+    headers: redactSensitiveData(headers) as Record<string, string>,
+    data: redactSensitiveData(data),
   };
 }

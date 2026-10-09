@@ -1,3 +1,5 @@
+import { redactSensitiveData } from './redaction.js';
+
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const levelPriority: Record<LogLevel, number> = {
@@ -7,7 +9,6 @@ const levelPriority: Record<LogLevel, number> = {
   error: 40,
 };
 
-const secretKeyPattern = /(token|authorization|api[-_]?key|password|secret|cookie)/i;
 const maxDepth = 6;
 
 function normalizeLevel(value: string | undefined): LogLevel {
@@ -61,10 +62,6 @@ function sanitizeValue(value: unknown, depth: number, visited: WeakSet<object>):
 
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      if (secretKeyPattern.test(key)) {
-        output[key] = '[REDACTED]';
-        continue;
-      }
       output[key] = sanitizeValue(item, depth + 1, visited);
     }
     return output;
@@ -74,7 +71,7 @@ function sanitizeValue(value: unknown, depth: number, visited: WeakSet<object>):
 }
 
 function serialize(level: LogLevel, msg: string, fields: Record<string, unknown> = {}): string {
-  const sanitizedFields = sanitizeValue(fields, 0, new WeakSet<object>());
+  const sanitizedFields = sanitizeValue(redactSensitiveData(fields), 0, new WeakSet<object>());
   const extraFields =
     sanitizedFields && typeof sanitizedFields === 'object' && !Array.isArray(sanitizedFields)
       ? (sanitizedFields as Record<string, unknown>)

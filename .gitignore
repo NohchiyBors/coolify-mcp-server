@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+.env.backup-*
+-win11-VH1.env
 *.log
 opencart-credentials*.json
 shared-databases-credentials*.json
@@ -23,6 +25,11 @@ shared-databases-credentials*.json
 /StatusProject/MEMORY*.md
 /StatusProject/PROJECT-RESUME*.md
 /StatusProject/STATUS-LOG*.md
+/StatusProject/USER-SETTINGS.local.md
+/StatusProject/CONTEXT-INDEX*.md
+/StatusProject/STATE-HISTORY*.md
+/StatusProject/.backup/
+/StatusProject/.state-backups/
 StatusProject/coolify-audit-*.json
 StatusProject/coolify-audit-*.md
 StatusProject/coolify-server-tree-*.json
